@@ -17,6 +17,63 @@ def test_sm89_kernel_imports():
     assert callable(fp8_paged_mqa_logits_triton_sm89)
 
 
+def test_sm89_indexer_kernel_matches_torch_reference():
+    if not torch.cuda.is_available() or torch.cuda.get_device_capability() != (8, 9):
+        return
+
+    from sglang.srt.layers.attention.dsv4.indexer import (
+        fp8_paged_mqa_logits_torch_sm120,
+    )
+    from sglang.srt.layers.attention.dsv4.triton_paged_mqa_logits import (
+        fp8_paged_mqa_logits_triton_sm89,
+    )
+
+    torch.manual_seed(0)
+    device = torch.device("cuda")
+    batch_size = 2
+    num_pages = 6
+    block_size = 64
+    num_heads = 64
+    head_dim = 128
+    max_seq_len = 150
+
+    q = (torch.randn(batch_size, 1, num_heads, head_dim, device=device) * 0.25).to(
+        torch.float8_e4m3fn
+    )
+    weight = torch.rand(batch_size, num_heads, dtype=torch.bfloat16, device=device)
+    weight /= weight.sum(dim=-1, keepdim=True)
+
+    cache = torch.empty(
+        num_pages,
+        block_size,
+        1,
+        head_dim + 4,
+        dtype=torch.uint8,
+        device=device,
+    )
+    cache_flat = cache.view(num_pages, -1)
+    value_bytes = block_size * head_dim
+    values = (torch.randn(num_pages, block_size, head_dim, device=device) * 0.25).to(
+        torch.float8_e4m3fn
+    )
+    scales = torch.rand(num_pages, block_size, dtype=torch.float32, device=device) + 0.5
+    cache_flat[:, :value_bytes].copy_(values.view(torch.uint8).view(num_pages, -1))
+    cache_flat[:, value_bytes:].copy_(scales.view(torch.uint8).view(num_pages, -1))
+
+    seq_lens = torch.tensor([139, 75], dtype=torch.int32, device=device)
+    page_table = torch.tensor(
+        [[3, 1, 4], [0, 2, 5]], dtype=torch.int32, device=device
+    )
+    args = (q, cache, weight, seq_lens, page_table, None, max_seq_len, False)
+
+    expected = fp8_paged_mqa_logits_torch_sm120(*args)
+    actual = fp8_paged_mqa_logits_triton_sm89(*args)
+
+    valid = torch.arange(max_seq_len, device=device)[None, :] < seq_lens[:, None]
+    torch.testing.assert_close(actual[valid], expected[valid], rtol=2e-3, atol=2e-3)
+    assert torch.isneginf(actual[~valid]).all()
+
+
 def test_common_sm89_helper_is_strict():
     from sglang.srt.utils.common import is_cuda, is_sm89_supported
 

@@ -14,9 +14,9 @@ FP8_DTYPE = torch.float8_e4m3fn
 @triton.jit
 def _paged_dot_relu_kernel(
     kv_val_ptr,
-    kv_srow,
-    kv_sdim,
+    kv_val_spage,
     kv_sc_ptr,
+    kv_sc_spage,
     q_ptr,
     q_sb,
     q_snh,
@@ -49,13 +49,19 @@ def _paged_dot_relu_kernel(
     kv_offs = kv_start + p_offs
     valid = (kv_offs < seq_len) & (kv_offs < max_seq_len)
 
-    row_offs = page_id * BS + p_offs
     d_offs = tl.arange(0, HD)
-    kv_2d = row_offs[:, None] * kv_srow + d_offs[None, :] * kv_sdim
+    kv_2d = (
+        page_id * kv_val_spage
+        + p_offs[:, None] * HD
+        + d_offs[None, :]
+    )
     kv_fp8 = tl.load(kv_val_ptr + kv_2d, mask=valid[:, None], other=0.0)
-    kv_f32 = kv_fp8.to(tl.float32)
 
-    kv_scale = tl.load(kv_sc_ptr + row_offs, mask=valid, other=0.0)
+    kv_scale = tl.load(
+        kv_sc_ptr + page_id * kv_sc_spage + p_offs,
+        mask=valid,
+        other=0.0,
+    )
 
     h_offs = tl.arange(0, NH)
     q_2d = h_offs[:, None] * q_snh + d_offs[None, :] * q_shd
@@ -63,7 +69,7 @@ def _paged_dot_relu_kernel(
     w = tl.load(w_ptr + pid_b * w_sb + h_offs)
 
     dot = tl.dot(
-        kv_f32.to(tl.float16), tl.trans(q.to(tl.float16)), out_dtype=tl.float32
+        kv_fp8.to(tl.float16), tl.trans(q.to(tl.float16)), out_dtype=tl.float32
     )
     score = tl.sum(tl.maximum(dot, 0.0) * w[None, :], axis=1) * kv_scale
 
@@ -100,15 +106,14 @@ def fp8_paged_mqa_logits_triton_sm89(
     total_dim = block_size * (head_dim + 4)
     scale_offset = block_size * head_dim
 
+    # Each page stores all FP8 values first, followed by one FP32 scale per
+    # token. Keep the page stride and let Triton address both regions in place;
+    # materializing contiguous slices here would copy the entire KV pool on
+    # every decode step.
     kvcache_flat = kvcache_fp8.view(total_pages, total_dim)
-    kv_val_u8 = kvcache_flat[:, :scale_offset].contiguous()
-    kv_val_fp8 = kv_val_u8.view(dtype=FP8_DTYPE).reshape(
-        total_pages * block_size, head_dim
-    )
-    kv_sc_u8 = kvcache_flat[:, scale_offset:].contiguous()
-    kv_sc_f32 = kv_sc_u8.view(dtype=torch.float32).reshape(total_pages * block_size)
-
-    q_f32 = q_fp8[:, 0].to(torch.float32)
+    kv_val_fp8 = kvcache_flat[:, :scale_offset].view(dtype=FP8_DTYPE)
+    kv_sc_f32 = kvcache_flat[:, scale_offset:].view(dtype=torch.float32)
+    q = q_fp8[:, 0]
     logits = torch.full(
         (batch_size, max_seq_len),
         float("-inf"),
@@ -120,12 +125,12 @@ def fp8_paged_mqa_logits_triton_sm89(
     _paged_dot_relu_kernel[(batch_size, max_pages)](
         kv_val_fp8,
         kv_val_fp8.stride(0),
-        kv_val_fp8.stride(1),
         kv_sc_f32,
-        q_f32,
-        q_f32.stride(0),
-        q_f32.stride(1),
-        q_f32.stride(2),
+        kv_sc_f32.stride(0),
+        q,
+        q.stride(0),
+        q.stride(1),
+        q.stride(2),
         weight,
         weight.stride(0),
         page_table,
