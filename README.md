@@ -1,85 +1,104 @@
-# DeepSeek-V4 Flash MXFP4 for SM89
+# DeepSeek-V4 Flash MXFP4：RTX 4090（SM89）专用推理分支
 
-An experimental SGLang fork focused on running the DeepSeek-V4-Flash-0731
-MXFP4 checkpoint on a single 8 x NVIDIA RTX 4090 (SM89) server with tensor
-parallelism 8.
+这是一个面向单机 **8×NVIDIA RTX 4090 24 GB** 的 SGLang 实验分支，目标是在
+Ada SM89 架构上运行 `DeepSeek-V4-Flash-0731` MXFP4 权重，并针对 TP8 的
+Attention、Indexer、MoE、CUDA Graph 和显存布局进行底层适配。
 
-This repository contains framework source code only. Model weights, compiled
-caches, benchmark prompts, credentials, and host-specific configuration are not
-included.
+仓库只包含推理框架源码，不包含模型权重、JIT 缓存、基准请求、访问凭据或服务器
+专用配置。
 
 > [!WARNING]
-> This branch is a performance research snapshot, not a production release.
-> The target-only path is operational and benchmarked. DSpark speculative
-> decoding did not pass strict token-by-token parity, and repeated target-only
-> requests can still diverge when request slots or compression state are reused.
-> See [Known limitations](#known-limitations) before using generated output.
+> 当前版本是性能研究快照，不是生产版本。target-only 路径已能启动并完成性能测试，
+> 但请求槽或压缩状态复用时仍可能出现输出漂移；DSpark 也尚未通过严格逐 token
+> 一致性验证。部署前请先阅读[已知限制](#已知限制)。
 
-## Snapshot
+## 项目概览
 
-- Framework snapshot: `d8f0ff966`
-- Release tag: `v0.1.0-experimental`
-- Upstream base: SGLang `131bd51b`
-- GPU architecture: NVIDIA Ada, SM89
-- Validated topology: 8 x RTX 4090 24 GB, TP=8
-- Checkpoint format: MXFP4 routed experts with FP8 KV cache
-- Recommended serving mode: target-only, full decode CUDA graph
-- License: Apache-2.0, inherited from SGLang
+| 项目 | 当前状态 |
+| --- | --- |
+| 框架快照 | `d8f0ff966` |
+| 实验版本 | `v0.1.0-experimental` |
+| 上游基线 | SGLang `131bd51b` |
+| GPU 架构 | NVIDIA Ada SM89 |
+| 已验证拓扑 | 8×RTX 4090 24 GB，TP=8 |
+| 权重格式 | MXFP4 routed experts |
+| KV Cache | FP8 E4M3 |
+| 推荐模式 | target-only + decode full CUDA Graph |
+| 开源许可 | Apache-2.0，继承自 SGLang |
 
-## What changed
+## 底层适配内容
 
-The branch adds an SM89-specific DeepSeek-V4 execution path instead of relying
-on kernels intended for Hopper or Blackwell:
+这个分支没有沿用面向 Hopper/Blackwell 的默认快速路径，而是补齐 SM89 所需的
+运行时和 kernel 路由：
 
-- Enables MXFP4 Marlin MoE execution on SM89 and selects it automatically.
-- Routes sparse MLA decode and prefill through SM89-compatible Triton kernels.
-- Adds a dedicated BF16 sparse-prefill kernel for the Ada launch geometry.
-- Pins the sparse decode launch configuration to 32-token tiles, 8 warps, and
-  2 stages to avoid runtime autotune allocation spikes.
-- Keeps the native eight local query heads under TP=8 rather than padding to a
-  64-head FlashMLA layout.
-- Avoids redundant SM89 indexer KV-pool copies.
-- Adds SM89 fallbacks for FP8 indexer and MHC prenorm operations.
-- Loads fused shared-expert weights in the DSpark draft model.
-- Initializes offline C4/C128 compression-state pools to explicit empty-state
-  sentinels.
+- 为 SM89 启用 MXFP4 Marlin MoE，并在加载阶段自动选择对应后端。
+- 将稀疏 MLA decode 和 prefill 路由到 SM89 可执行的 Triton kernel。
+- 增加面向 Ada launch geometry 的 BF16 sparse prefill kernel。
+- 固定 sparse decode 为 32-token tile、8 warps、2 stages，避免运行期 autotune
+  临时申请显存导致 OOM。
+- TP8 下保留每个 rank 原生 8 个 query heads，不再填充到 FlashMLA 的 64-head
+  布局。
+- 避免 SM89 Indexer KV pool 的冗余拷贝。
+- 为 FP8 Indexer 和 MHC prenorm 增加 SM89 fallback。
+- 修复 DSpark draft model 的 fused shared-expert 权重加载。
+- 将离线 C4/C128 压缩状态池初始化为明确的空状态 sentinel。
 
-The complete patch series is available with:
+查看完整补丁序列：
 
 ```bash
 git log --oneline 131bd51b..d8f0ff966
 ```
 
-## Measured performance
+## 性能实测
 
-These results were measured on one 8 x RTX 4090 24 GB machine with TP=8,
-context length 8192, maximum running requests 8, full decode CUDA graphs, and
-custom all-reduce disabled. They are point measurements from this hardware and
-software snapshot, not general SGLang claims.
+测试环境为单机 8×RTX 4090 24 GB、TP=8、上下文长度 8192、最大并发请求数 8、
+decode full CUDA Graph，并关闭 custom all-reduce。下列数据只代表这一组固定硬件、
+软件和请求配置，不是通用 SGLang 性能结论。
 
-| Scenario | Metric | Result |
+| 场景 | 指标 | 结果 |
 | --- | --- | ---: |
-| C1 | Decode throughput | 54.75 tok/s |
-| C1 | End-to-end throughput | 50.36 tok/s |
-| C1 | Time to first token | 0.222 s |
-| C8 | Scheduler output throughput | 382.8-383.8 tok/s |
-| C8 | Aggregate decode-window throughput | 374.58 tok/s |
-| C8 | Aggregate end-to-end throughput | 318.59 tok/s |
-| C8 | Mean GPU utilization | about 92.7% |
+| C1 | 解码吞吐 | 54.75 token/s |
+| C1 | 端到端吞吐 | 50.36 token/s |
+| C1 | 首 token 延迟（TTFT） | 0.222 s |
+| C8 | Scheduler 输出吞吐 | 382.8–383.8 token/s |
+| C8 | 解码窗口聚合吞吐 | 374.58 token/s |
+| C8 | 端到端聚合吞吐 | 318.59 token/s |
+| C8 | GPU 平均利用率 | 约 92.7% |
 
-The benchmark used 256 input tokens, 128 generated tokens, greedy sampling,
-`ignore_eos=true`, and simultaneous C8 request release. Throughput definitions
-must be kept separate when comparing these numbers with other engines.
+![8×RTX 4090 推理吞吐实测](docs/assets/sm89/benchmark-throughput.png)
 
-## Environment
+以 C1 解码吞吐 `54.75×8=438.00 token/s` 作为理想线性参考：
 
-Use a CUDA-capable Linux environment compatible with the current SGLang main
-branch. The validated deployment used Python 3.10, CUDA 13 user-space
-libraries, a matching PyTorch build, Triton, TVM-FFI JIT support, and an
-SGLang kernel wheel built for the same CUDA ABI.
+- C8 Scheduler 输出达到理想值的约 **87.5%**。
+- C8 解码窗口聚合吞吐达到理想值的约 **85.5%**。
+- C8 端到端聚合吞吐达到理想值的约 **72.7%**。
+- 解码窗口相对 Scheduler 输出保留约 **97.7%**。
+- 端到端吞吐相对 Scheduler 输出保留约 **83.1%**。
 
-Follow the upstream [SGLang installation documentation](https://docs.sglang.ai/)
-to create the base environment, then run this checkout through `PYTHONPATH`:
+![TP8 扩展效率与吞吐保留率](docs/assets/sm89/parallel-efficiency.png)
+
+基准使用 256 个输入 token、128 个输出 token、greedy sampling、
+`ignore_eos=true`，C8 请求通过 barrier 同时发射。比较其他引擎时必须保持
+Scheduler、decode-window 和端到端三种统计口径一致。
+
+图表可通过下列命令重新生成：
+
+```bash
+python scripts/generate_readme_charts.py
+```
+
+## 运行环境
+
+需要与当前 SGLang `main` 兼容的 Linux CUDA 环境。已验证环境使用：
+
+- Python 3.10
+- CUDA 13 用户态库
+- 与 CUDA ABI 匹配的 PyTorch
+- Triton 与 TVM-FFI JIT
+- 与 CUDA ABI 匹配的 SGLang kernel wheel
+
+先根据 [SGLang 官方文档](https://docs.sglang.ai/)准备基础环境，再通过
+`PYTHONPATH` 使用本仓库源码：
 
 ```bash
 git clone https://github.com/xltzsoft/deepseek-v4-sm89.git
@@ -91,12 +110,12 @@ export CUDA_MODULE_LOADING=LAZY
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 ```
 
-The DeepSeek-V4-Flash-0731 MXFP4 weights must be downloaded separately. Set
-`MODEL_PATH` to the local ModelScope or Hugging Face snapshot directory.
+模型权重需要从 ModelScope 或 Hugging Face 单独下载。请将 `MODEL_PATH` 指向
+本地 `DeepSeek-V4-Flash-0731` MXFP4 快照目录，并遵守模型自身的许可条款。
 
-## Launch
+## 启动服务
 
-The validated target-only configuration was:
+已验证的 target-only 启动参数如下：
 
 ```bash
 export MODEL_PATH=/path/to/DeepSeek-V4-Flash-0731
@@ -122,14 +141,12 @@ python -m sglang.launch_server \
   --disable-custom-all-reduce
 ```
 
-Keep the service bound to loopback unless authentication and network controls
-have been configured explicitly.
+除非已经配置认证和网络访问控制，否则不要把服务直接绑定到公网地址。
 
-## Validation
+## 回归验证
 
-The SM89 patch includes focused unit coverage for backend selection, native
-head geometry, sparse prefill, DSpark shared-expert loading, launch selection,
-and compression-state initialization:
+SM89 补丁包含 backend 选择、原生 head geometry、sparse prefill、DSpark
+shared-expert 加载、launch config 和压缩状态初始化等定向测试：
 
 ```bash
 pytest -q \
@@ -141,27 +158,24 @@ pytest -q \
   test/registered/unit/models/test_deepseek_v4_sm89_head_padding.py
 ```
 
-Before trusting a deployment, perform at least two cold starts and replay the
-same greedy prompts in forward and reverse order. Compare every output token,
-not only decoded text or acceptance rate.
+本次发布前的定向回归结果为 `16 passed, 3 skipped`。
 
-## Known limitations
+部署验证至少应包含两次冷启动，并以正序和反序重复执行同一组 greedy 请求。
+必须逐 token 对比 `output_ids`，不能只比较解码文本或 speculative acceptance rate。
 
-1. **Compression-state lifecycle is not fully resolved.** Disabling the radix
-   cache does not eliminate request-order drift. C128 state follows request-slot
-   ownership, while C4 attention and indexer state follow physical SWA pages.
-   Precise generation/page cleanup is still required.
-2. **DSpark is not accepted for this snapshot.** It can load and start within
-   24 GB per GPU after the included fixes, but greedy outputs did not match the
-   target reference and the eager-only path was slower than target CUDA graphs.
-3. **Weights are not redistributed.** Obtain the checkpoint under its own
-   license and usage terms.
-4. **The performance envelope is narrow.** Different drivers, CUDA/PyTorch
-   builds, clocks, thermals, prompts, or batching policies can materially change
-   throughput.
+## 已知限制
 
-## Upstream and license
+1. **压缩状态生命周期尚未闭环。** 关闭 radix cache 仍不能消除请求顺序引起的
+   输出漂移。C128 状态跟随 request slot，C4 attention/indexer 状态跟随物理
+   SWA page，仍需完成精确的 generation/page 清理。
+2. **当前不建议启用 DSpark。** 修复后 DSpark 可以在每卡 24 GB 内完成加载和启动，
+   但 greedy 输出没有通过 target reference 的逐 token 一致性验证，且 eager-only
+   路径慢于 target CUDA Graph。
+3. **仓库不分发模型权重。** 使用者需自行获取权重并遵守其许可证和使用条款。
+4. **性能结果适用范围有限。** 驱动、CUDA/PyTorch 版本、GPU 时钟与温度、prompt
+   分布和 batching 策略都会显著影响吞吐。
 
-This work is derived from [sgl-project/sglang](https://github.com/sgl-project/sglang).
-The original copyright notices and Apache-2.0 license are retained. Changes in
-this branch are provided under the same license.
+## 上游与许可
+
+本项目派生自 [sgl-project/sglang](https://github.com/sgl-project/sglang)。仓库保留
+原始版权声明与 Apache-2.0 许可证，本分支修改同样按照该许可证发布。
