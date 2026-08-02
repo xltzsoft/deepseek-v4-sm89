@@ -154,7 +154,7 @@ from sglang.srt.utils import (
     log_info_on_rank0,
     make_layers,
 )
-from sglang.srt.utils.common import is_sm120_supported
+from sglang.srt.utils.common import is_sm89_supported, is_sm120_supported
 from sglang.srt.utils.custom_op import register_custom_op
 from sglang.srt.utils.hf_transformers_utils import get_rope_config
 
@@ -221,6 +221,7 @@ _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 # gather instead of on the gathered global buffer. Requires
 # SGLANG_SHARED_EXPERT_TP1=1 (replicated shared expert). Default OFF.
 _SHARED_EXPERT_LOCAL = get_bool_env_var("SGLANG_DP_SHARED_EXPERT_LOCAL")
+_is_sm89 = is_sm89_supported()
 _is_gfx95_supported = is_gfx95_supported()
 _is_gfx942_supported = is_gfx942_supported()
 
@@ -553,11 +554,35 @@ class MqaAttentionBase(nn.Module):
         if self._attn_sink_local is None:
             rank = self.attn_tp_rank
             num_heads = self.n_local_heads
-            padded_num_heads = 64 if num_heads <= 64 else self.n_heads
+            # Ada uses the native local-head Triton path. Other architectures
+            # keep FlashMLA's 64/128-head contract.
+            padded_num_heads = (
+                num_heads if _is_sm89 else (64 if num_heads <= 64 else self.n_heads)
+            )
             sink = self.attn_sink.new_zeros(padded_num_heads)
             sink[:num_heads] = self.attn_sink[rank * num_heads : (rank + 1) * num_heads]
             self._attn_sink_local = sink
         return self._attn_sink_local
+
+    def _prepare_tp_query_buffer(
+        self, x: torch.Tensor
+    ) -> Tuple[slice, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if self.attn_tp_size == 1 or _is_sm89:
+            return slice(None), None, None
+
+        # FlashMLA's fp8 sparse decode kernel only specializes h_q for {64, 128}.
+        # Pad the per-rank heads to 64 (not the full n_heads) when they fit, to
+        # dispatch the cheaper decode::head64 variant.
+        padded_num_heads = 64 if self.n_local_heads <= 64 else self.n_heads
+        # Only [0:n_local_heads] is written below. Uninitialized padded TP heads
+        # inject NaN into attention on gfx942 (fnuz), so zero-init there; other
+        # architectures tolerate new_empty and skip the per-forward memset.
+        if _is_gfx942_supported:
+            q_padded = x.new_zeros(x.shape[0], padded_num_heads, self.head_dim)
+        else:
+            q_padded = x.new_empty(x.shape[0], padded_num_heads, self.head_dim)
+        tp_slice = slice(0, self.n_local_heads)
+        return tp_slice, q_padded, q_padded[:, tp_slice, :]
 
     @contextmanager
     def maybe_use_decode_attn_tp(self, forward_batch: ForwardBatch):
@@ -1188,23 +1213,7 @@ class MQALayer(MqaAttentionBase):
             and not (_is_hip and self.compressor is None)
         )
 
-        tp_slice, q_padded, q_out = slice(None), None, None
-        if self.attn_tp_size > 1:
-            # FlashMLA's fp8 sparse decode kernel only specializes h_q for {64, 128}.
-            # Pad the per-rank heads to 64 (not the full n_heads) when they fit, to
-            # dispatch the cheaper decode::head64 variant; attn_sink is sliced to
-            # this rank and padded to match.
-            padded_num_heads = 64 if self.n_local_heads <= 64 else self.n_heads
-            # Only [0:n_local_heads] is written below. Uninitialized padded TP
-            # heads inject NaN into attention on gfx942 (fnuz), so zero-init
-            # there; other archs tolerate new_empty and skip the per-forward
-            # memset.
-            if _is_gfx942_supported:
-                q_padded = x.new_zeros(x.shape[0], padded_num_heads, self.head_dim)
-            else:
-                q_padded = x.new_empty(x.shape[0], padded_num_heads, self.head_dim)
-            tp_slice = slice(0, self.n_local_heads)
-            q_out = q_padded[:, tp_slice, :]
+        tp_slice, q_padded, q_out = self._prepare_tp_query_buffer(x)
         attn_sink = self._local_attn_sink()
 
         if enable_multi_stream:
