@@ -1,95 +1,167 @@
-<div align="center" id="sglangtop">
-<img src="https://raw.githubusercontent.com/sgl-project/sglang/main/assets/logo.png" alt="logo" width="400" margin="10px"></img>
+# DeepSeek-V4 Flash MXFP4 for SM89
 
-[![PyPI](https://img.shields.io/pypi/v/sglang)](https://pypi.org/project/sglang)
-![PyPI - Downloads](https://static.pepy.tech/badge/sglang?period=month)
-[![license](https://img.shields.io/github/license/sgl-project/sglang.svg)](https://github.com/sgl-project/sglang/tree/main/LICENSE)
-[![issue resolution](https://img.shields.io/github/issues-closed-raw/sgl-project/sglang)](https://github.com/sgl-project/sglang/issues)
-[![open issues](https://img.shields.io/github/issues-raw/sgl-project/sglang)](https://github.com/sgl-project/sglang/issues)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/sgl-project/sglang)
+An experimental SGLang fork focused on running the DeepSeek-V4-Flash-0731
+MXFP4 checkpoint on a single 8 x NVIDIA RTX 4090 (SM89) server with tensor
+parallelism 8.
 
-</div>
+This repository contains framework source code only. Model weights, compiled
+caches, benchmark prompts, credentials, and host-specific configuration are not
+included.
 
---------------------------------------------------------------------------------
+> [!WARNING]
+> This branch is a performance research snapshot, not a production release.
+> The target-only path is operational and benchmarked. DSpark speculative
+> decoding did not pass strict token-by-token parity, and repeated target-only
+> requests can still diverge when request slots or compression state are reused.
+> See [Known limitations](#known-limitations) before using generated output.
 
-<p align="center">
-<a href="https://lmsys.org/blog/"><b>Blog</b></a> |
-<a href="https://docs.sglang.io/"><b>Documentation</b></a> |
-<a href="https://roadmap.sglang.io/"><b>Roadmap</b></a> |
-<a href="https://slack.sglang.io/"><b>Join Slack</b></a> |
-<a href="https://meet.sglang.io/"><b>Weekly Dev Meeting</b></a> |
-<a href="https://github.com/sgl-project/sgl-learning-materials?tab=readme-ov-file#slides"><b>Slides</b></a>
-</p>
+## Snapshot
 
-## News
-- [2026/06] 🔥 The next generation of speculative decoding: DFlash and Spec V2 ([blog](https://lmsys.org/blog/2026-06-15-next-generation-speculative-decoding-dflash-v2/)).
-- [2026/04] 🔥 DeepSeek-V4 on Day 0: From Fast Inference to Verified RL with SGLang and Miles ([blog](https://lmsys.org/blog/2026-04-25-deepseek-v4/)).
-- [2026/06] SGLang provides day-0 support for latest open models ([Nemotron 3 Ultra](https://lmsys.org/blog/2026-06-04-nvidia-run-nemotron-3-ultra/), [Nemotron 3 Super](https://lmsys.org/blog/2026-03-11-run-nvidia-nemotron-3-super/), [Higgs Audio v3 TTS](https://lmsys.org/blog/2026-06-04-higgs-audio-v3-tts/)).
-- [2026/02] 🔥 Unlocking 25x Inference Performance with SGLang on NVIDIA GB300 NVL72 ([blog](https://lmsys.org/blog/2026-02-20-gb300-inferencex/)).
-- [2026/01] SGLang Diffusion accelerates video and image generation ([blog](https://lmsys.org/blog/2026-01-16-sglang-diffusion/)).
-- [2025/12] SGLang provides day-0 support for latest open models ([MiMo-V2-Flash](https://lmsys.org/blog/2025-12-16-mimo-v2-flash/), [Nemotron 3 Nano](https://lmsys.org/blog/2025-12-15-run-nvidia-nemotron-3-nano/), [Mistral Large 3](https://github.com/sgl-project/sglang/pull/14213), [LLaDA 2.0 Diffusion LLM](https://lmsys.org/blog/2025-12-19-diffusion-llm/), [MiniMax M2](https://lmsys.org/blog/2025-11-04-miminmax-m2/)).
-- [2025/10] SGLang now runs natively on TPU with the SGLang-Jax backend ([blog](https://lmsys.org/blog/2025-10-29-sglang-jax/)).
+- Framework snapshot: `d8f0ff966`
+- Release tag: `v0.1.0-experimental`
+- Upstream base: SGLang `131bd51b`
+- GPU architecture: NVIDIA Ada, SM89
+- Validated topology: 8 x RTX 4090 24 GB, TP=8
+- Checkpoint format: MXFP4 routed experts with FP8 KV cache
+- Recommended serving mode: target-only, full decode CUDA graph
+- License: Apache-2.0, inherited from SGLang
 
-<details>
-<summary>More</summary>
+## What changed
 
-- [2025/09] Deploying DeepSeek on GB200 NVL72 with PD and Large Scale EP (Part II): 3.8x Prefill, 4.8x Decode Throughput ([blog](https://lmsys.org/blog/2025-09-25-gb200-part-2/)).
-- [2025/09] SGLang Day 0 Support for DeepSeek-V3.2 with Sparse Attention ([blog](https://lmsys.org/blog/2025-09-29-deepseek-V32/)).
-- [2025/08] SGLang x AMD SF Meetup on 8/22: Hands-on GPU workshop, tech talks by AMD/xAI/SGLang, and networking ([Roadmap](https://github.com/sgl-project/sgl-learning-materials/blob/main/slides/amd_meetup_sglang_roadmap.pdf), [Large-scale EP](https://github.com/sgl-project/sgl-learning-materials/blob/main/slides/amd_meetup_sglang_ep.pdf), [Highlights](https://github.com/sgl-project/sgl-learning-materials/blob/main/slides/amd_meetup_highlights.pdf), [AITER/MoRI](https://github.com/sgl-project/sgl-learning-materials/blob/main/slides/amd_meetup_aiter_mori.pdf), [Wave](https://github.com/sgl-project/sgl-learning-materials/blob/main/slides/amd_meetup_wave.pdf)).
+The branch adds an SM89-specific DeepSeek-V4 execution path instead of relying
+on kernels intended for Hopper or Blackwell:
 
-- [2025/11] SGLang Diffusion accelerates video and image generation ([blog](https://lmsys.org/blog/2025-11-07-sglang-diffusion/)).
-- [2025/10] PyTorch Conference 2025 SGLang Talk ([slide](https://github.com/sgl-project/sgl-learning-materials/blob/main/slides/sglang_pytorch_2025.pdf)).
-- [2025/10] SGLang x Nvidia SF Meetup on 10/2 ([recap](https://x.com/lmsysorg/status/1975339501934510231)).
-- [2025/08] SGLang provides day-0 support for OpenAI gpt-oss model ([instructions](https://github.com/sgl-project/sglang/issues/8833))
-- [2025/06] SGLang, the high-performance serving infrastructure powering trillions of tokens daily, has been awarded the third batch of the Open Source AI Grant by a16z ([a16z blog](https://a16z.com/advancing-open-source-ai-through-benchmarks-and-bold-experimentation/)).
-- [2025/05] Deploying DeepSeek with PD Disaggregation and Large-scale Expert Parallelism on 96 H100 GPUs ([blog](https://lmsys.org/blog/2025-05-05-large-scale-ep/)).
-- [2025/06] Deploying DeepSeek on GB200 NVL72 with PD and Large Scale EP (Part I): 2.7x Higher Decoding Throughput ([blog](https://lmsys.org/blog/2025-06-16-gb200-part-1/)).
-- [2025/03] Supercharge DeepSeek-R1 Inference on AMD Instinct MI300X ([AMD blog](https://rocm.blogs.amd.com/artificial-intelligence/DeepSeekR1-Part2/README.html))
-- [2025/03] SGLang Joins PyTorch Ecosystem: Efficient LLM Serving Engine ([PyTorch blog](https://pytorch.org/blog/sglang-joins-pytorch/))
-- [2025/02] Unlock DeepSeek-R1 Inference Performance on AMD Instinct™ MI300X GPU ([AMD blog](https://rocm.blogs.amd.com/artificial-intelligence/DeepSeekR1_Perf/README.html))
-- [2025/01] SGLang provides day one support for DeepSeek V3/R1 models on NVIDIA and AMD GPUs with DeepSeek-specific optimizations. ([instructions](https://github.com/sgl-project/sglang/tree/main/benchmark/deepseek_v3), [AMD blog](https://www.amd.com/en/developer/resources/technical-articles/amd-instinct-gpus-power-deepseek-v3-revolutionizing-ai-development-with-sglang.html), [10+ other companies](https://x.com/lmsysorg/status/1887262321636221412))
-- [2024/12] v0.4 Release: Zero-Overhead Batch Scheduler, Cache-Aware Load Balancer, Faster Structured Outputs ([blog](https://lmsys.org/blog/2024-12-04-sglang-v0-4/)).
-- [2024/10] The First SGLang Online Meetup ([slides](https://github.com/sgl-project/sgl-learning-materials?tab=readme-ov-file#the-first-sglang-online-meetup)).
-- [2024/09] v0.3 Release: 7x Faster DeepSeek MLA, 1.5x Faster torch.compile, Multi-Image/Video LLaVA-OneVision ([blog](https://lmsys.org/blog/2024-09-04-sglang-v0-3/)).
-- [2024/07] v0.2 Release: Faster Llama3 Serving with SGLang Runtime (vs. TensorRT-LLM, vLLM) ([blog](https://lmsys.org/blog/2024-07-25-sglang-llama3/)).
-- [2024/02] SGLang enables **3x faster JSON decoding** with compressed finite state machine ([blog](https://lmsys.org/blog/2024-02-05-compressed-fsm/)).
-- [2024/01] SGLang provides up to **5x faster inference** with RadixAttention ([blog](https://lmsys.org/blog/2024-01-17-sglang/)).
-- [2024/01] SGLang powers the serving of the official **LLaVA v1.6** release demo ([usage](https://github.com/haotian-liu/LLaVA?tab=readme-ov-file#demo)).
+- Enables MXFP4 Marlin MoE execution on SM89 and selects it automatically.
+- Routes sparse MLA decode and prefill through SM89-compatible Triton kernels.
+- Adds a dedicated BF16 sparse-prefill kernel for the Ada launch geometry.
+- Pins the sparse decode launch configuration to 32-token tiles, 8 warps, and
+  2 stages to avoid runtime autotune allocation spikes.
+- Keeps the native eight local query heads under TP=8 rather than padding to a
+  64-head FlashMLA layout.
+- Avoids redundant SM89 indexer KV-pool copies.
+- Adds SM89 fallbacks for FP8 indexer and MHC prenorm operations.
+- Loads fused shared-expert weights in the DSpark draft model.
+- Initializes offline C4/C128 compression-state pools to explicit empty-state
+  sentinels.
 
-</details>
+The complete patch series is available with:
 
-## About
-SGLang is a high-performance serving framework for large language models and multimodal models.
-It is designed to deliver low-latency and high-throughput inference across a wide range of setups, from a single GPU to large distributed clusters.
-Its core features include:
+```bash
+git log --oneline 131bd51b..d8f0ff966
+```
 
-- **Fast Runtime**: Provides efficient serving with RadixAttention for prefix caching, a zero-overhead CPU scheduler, prefill-decode disaggregation, speculative decoding, continuous batching, paged attention, tensor/pipeline/expert/data parallelism, structured outputs, chunked prefill, quantization (FP4/FP8/INT4/AWQ/GPTQ), and multi-LoRA batching.
-- **Broad Model Support**: Supports a wide range of language models (Llama, Qwen, DeepSeek, Kimi, GLM, GPT, Gemma, Mistral, etc.), embedding models (e5-mistral, gte, mcdse), reward models (Skywork), and diffusion models (WAN, Qwen-Image), with easy extensibility for adding new models. Compatible with most Hugging Face models and OpenAI APIs.
-- **Extensive Hardware Support**: Runs on NVIDIA GPUs (GB200/B300/H100/A100/Spark/5090), AMD GPUs (MI355/MI300), Intel Xeon CPUs, Google TPUs, Ascend NPUs, and more.
-- **Active Community**: SGLang is open-source and supported by a vibrant community with widespread industry adoption, powering over 400,000 GPUs worldwide.
-- **RL & Post-Training Backbone**: SGLang is a proven rollout backend used for training many frontier models, with native RL integrations and adoption by well-known post-training frameworks such as [**AReaL**](https://github.com/inclusionAI/AReaL), [**Miles**](https://github.com/radixark/miles), [**slime**](https://github.com/THUDM/slime), [**Tunix**](https://github.com/google/tunix), [**verl**](https://github.com/volcengine/verl) and more.
+## Measured performance
 
-## Getting Started
-- [Install SGLang](https://docs.sglang.io/get_started/install.html)
-- [Quick Start](https://docs.sglang.io/basic_usage/send_request.html)
-- [Backend Tutorial](https://docs.sglang.io/basic_usage/openai_api_completions.html)
-- [Frontend Tutorial](https://docs.sglang.io/references/frontend/frontend_tutorial.html)
-- [Contribution Guide](https://docs.sglang.io/developer_guide/contribution_guide.html)
+These results were measured on one 8 x RTX 4090 24 GB machine with TP=8,
+context length 8192, maximum running requests 8, full decode CUDA graphs, and
+custom all-reduce disabled. They are point measurements from this hardware and
+software snapshot, not general SGLang claims.
 
-## Benchmark and Performance
-Learn more in the release blogs: [v0.2 blog](https://lmsys.org/blog/2024-07-25-sglang-llama3/), [v0.3 blog](https://lmsys.org/blog/2024-09-04-sglang-v0-3/), [v0.4 blog](https://lmsys.org/blog/2024-12-04-sglang-v0-4/), [Large-scale expert parallelism](https://lmsys.org/blog/2025-05-05-large-scale-ep/), [GB200 rack-scale parallelism](https://lmsys.org/blog/2025-09-25-gb200-part-2/), [GB300 long context](https://lmsys.org/blog/2026-02-19-gb300-longctx/).
+| Scenario | Metric | Result |
+| --- | --- | ---: |
+| C1 | Decode throughput | 54.75 tok/s |
+| C1 | End-to-end throughput | 50.36 tok/s |
+| C1 | Time to first token | 0.222 s |
+| C8 | Scheduler output throughput | 382.8-383.8 tok/s |
+| C8 | Aggregate decode-window throughput | 374.58 tok/s |
+| C8 | Aggregate end-to-end throughput | 318.59 tok/s |
+| C8 | Mean GPU utilization | about 92.7% |
 
-## Adoption and Sponsorship
-SGLang has been deployed at large scale, generating trillions of tokens in production each day. It is trusted and adopted by a wide range of leading enterprises and institutions, including xAI, AMD, NVIDIA, Intel, LinkedIn, Cursor, Oracle Cloud, Google Cloud, Microsoft Azure, AWS, Atlas Cloud, Voltage Park, Nebius, DataCrunch, Novita, InnoMatrix, Modal, MIT, UCLA, the University of Washington, Stanford, UC Berkeley, Tsinghua University, Jam & Tea Studios, Baseten, and other major technology organizations.
-As an open-source LLM inference engine, SGLang has become the de facto industry standard, with deployments running on over 400,000 GPUs worldwide.
-SGLang is currently hosted under the non-profit open-source organization [LMSYS](https://lmsys.org/about/).
+The benchmark used 256 input tokens, 128 generated tokens, greedy sampling,
+`ignore_eos=true`, and simultaneous C8 request release. Throughput definitions
+must be kept separate when comparing these numbers with other engines.
 
-<img src="https://raw.githubusercontent.com/sgl-project/sgl-learning-materials/refs/heads/main/slides/adoption.png" alt="logo" width="800" margin="10px"></img>
+## Environment
 
-## Contact Us
-For enterprises interested in adopting or deploying SGLang at scale, including technical consulting, sponsorship opportunities, or partnership inquiries, please contact us at [sglang@lmsys.org](mailto:sglang@lmsys.org).
+Use a CUDA-capable Linux environment compatible with the current SGLang main
+branch. The validated deployment used Python 3.10, CUDA 13 user-space
+libraries, a matching PyTorch build, Triton, TVM-FFI JIT support, and an
+SGLang kernel wheel built for the same CUDA ABI.
 
-Long-term active SGLang contributors are eligible for coding agent sponsorship, such as Cursor, Claude Code, or OpenAI Codex. Email [sglang@lmsys.org](mailto:sglang@lmsys.org) with your most important commits or pull requests.
+Follow the upstream [SGLang installation documentation](https://docs.sglang.ai/)
+to create the base environment, then run this checkout through `PYTHONPATH`:
 
-## Acknowledgment
-We learned the design and reused code from the following projects: [Guidance](https://github.com/guidance-ai/guidance), [vLLM](https://github.com/vllm-project/vllm), [LightLLM](https://github.com/ModelTC/lightllm), [FlashInfer](https://github.com/flashinfer-ai/flashinfer), [Outlines](https://github.com/outlines-dev/outlines), and [LMQL](https://github.com/eth-sri/lmql).
+```bash
+git clone https://github.com/xltzsoft/deepseek-v4-sm89.git
+cd deepseek-v4-sm89
+
+export PYTHONPATH="$PWD/python"
+export TORCH_CUDA_ARCH_LIST=8.9
+export CUDA_MODULE_LOADING=LAZY
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+```
+
+The DeepSeek-V4-Flash-0731 MXFP4 weights must be downloaded separately. Set
+`MODEL_PATH` to the local ModelScope or Hugging Face snapshot directory.
+
+## Launch
+
+The validated target-only configuration was:
+
+```bash
+export MODEL_PATH=/path/to/DeepSeek-V4-Flash-0731
+
+python -m sglang.launch_server \
+  --model-path "$MODEL_PATH" \
+  --host 127.0.0.1 \
+  --port 31000 \
+  --tp-size 8 \
+  --context-length 8192 \
+  --max-running-requests 8 \
+  --max-total-tokens 8192 \
+  --max-prefill-tokens 8192 \
+  --chunked-prefill-size -1 \
+  --mem-fraction-static 0.92 \
+  --swa-full-tokens-ratio 1.0 \
+  --kv-cache-dtype fp8_e4m3 \
+  --attention-backend dsv4 \
+  --moe-runner-backend marlin \
+  --cuda-graph-backend-decode full \
+  --cuda-graph-backend-prefill disabled \
+  --cuda-graph-max-bs-decode 8 \
+  --disable-custom-all-reduce
+```
+
+Keep the service bound to loopback unless authentication and network controls
+have been configured explicitly.
+
+## Validation
+
+The SM89 patch includes focused unit coverage for backend selection, native
+head geometry, sparse prefill, DSpark shared-expert loading, launch selection,
+and compression-state initialization:
+
+```bash
+pytest -q \
+  test/registered/attention/unittests/dsv4/test_deepseek_v4_sm89.py \
+  test/registered/kernels/ops/attention/test_sparse_prefill_bf16_sm89.py \
+  test/registered/unit/kernels/test_flash_mla_sm89_config.py \
+  test/registered/unit/mem_cache/test_deepseek_v4_compress_state_init.py \
+  test/registered/unit/models/test_deepseek_v4_dspark_weight_loading.py \
+  test/registered/unit/models/test_deepseek_v4_sm89_head_padding.py
+```
+
+Before trusting a deployment, perform at least two cold starts and replay the
+same greedy prompts in forward and reverse order. Compare every output token,
+not only decoded text or acceptance rate.
+
+## Known limitations
+
+1. **Compression-state lifecycle is not fully resolved.** Disabling the radix
+   cache does not eliminate request-order drift. C128 state follows request-slot
+   ownership, while C4 attention and indexer state follow physical SWA pages.
+   Precise generation/page cleanup is still required.
+2. **DSpark is not accepted for this snapshot.** It can load and start within
+   24 GB per GPU after the included fixes, but greedy outputs did not match the
+   target reference and the eager-only path was slower than target CUDA graphs.
+3. **Weights are not redistributed.** Obtain the checkpoint under its own
+   license and usage terms.
+4. **The performance envelope is narrow.** Different drivers, CUDA/PyTorch
+   builds, clocks, thermals, prompts, or batching policies can materially change
+   throughput.
+
+## Upstream and license
+
+This work is derived from [sgl-project/sglang](https://github.com/sgl-project/sglang).
+The original copyright notices and Apache-2.0 license are retained. Changes in
+this branch are provided under the same license.
