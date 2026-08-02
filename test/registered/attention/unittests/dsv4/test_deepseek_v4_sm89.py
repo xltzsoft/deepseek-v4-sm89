@@ -17,19 +17,21 @@ def test_sm89_kernel_imports():
     assert callable(fp8_paged_mqa_logits_triton_sm89)
 
 
-def test_sm89_prefill_avoids_hopper_aot_sparse_kernel():
+def test_sm89_prefill_selects_native_sparse_kernel():
     from sglang.srt.layers.attention import deepseek_v4_backend as backend
     from sglang.srt.model_executor.forward_batch_info import ForwardMode
 
-    with patch.object(backend, "_use_flashmla_fallback_path", True):
-        assert not backend._should_use_flashmla_sparse_prefill(
+    with patch.object(backend, "_is_sm89", True), patch.object(
+        backend, "_use_flashmla_fallback_path", True
+    ):
+        assert backend._should_use_sparse_prefill(
             ForwardMode.EXTEND, num_queries=1024
         )
 
-    with patch.object(backend, "_use_flashmla_fallback_path", False):
-        assert backend._should_use_flashmla_sparse_prefill(
-            ForwardMode.EXTEND, num_queries=1024
-        )
+    with patch.object(backend, "_is_sm89", False), patch.object(
+        backend, "_use_flashmla_fallback_path", True
+    ):
+        assert not backend._should_use_sparse_prefill(ForwardMode.EXTEND, 1024)
 
 
 def test_sm89_indexer_kernel_matches_torch_reference():

@@ -126,13 +126,11 @@ def _get_target_verify_bs(forward_batch: ForwardBatch) -> int:
     return draft_count // draft_token_num
 
 
-def _should_use_flashmla_sparse_prefill(
-    forward_mode: ForwardMode, num_queries: int
-) -> bool:
-    """Whether the architecture-specific AOT sparse prefill kernel is usable."""
+def _should_use_sparse_prefill(forward_mode: ForwardMode, num_queries: int) -> bool:
+    """Whether an architecture-specific sparse prefill kernel is usable."""
     return (
         forward_mode.is_extend_without_speculative()
-        and not _use_flashmla_fallback_path
+        and (_is_sm89 or not _use_flashmla_fallback_path)
         and (
             num_queries > _LARGE_INDEXER_QUERY_THRESHOLD
             or envs.SGLANG_OPT_FLASHMLA_SPARSE_PREFILL.get()
@@ -1714,11 +1712,9 @@ class DeepseekV4AttnBackend(
                     extra_indices.shape[-1] % 64 == 0
                 ), f"{extra_indices.shape=}'s last dimension is not aligned to 64"
 
-            # The AOT sparse prefill kernel supports SM90a/SM100f only. SM89
-            # and SM120 use the paged Triton path for every forward mode.
-            if _should_use_flashmla_sparse_prefill(
-                forward_batch.forward_mode, q.shape[0]
-            ):
+            # SM89 has a BF16 Tensor Core Triton implementation; SM90a/SM100f
+            # use the AOT kernel. SM120 remains on the paged Triton path.
+            if _should_use_sparse_prefill(forward_batch.forward_mode, q.shape[0]):
                 return self._forward_prefill_sparse(
                     q=q,
                     layer_id=layer_id,
@@ -1784,17 +1780,14 @@ class DeepseekV4AttnBackend(
         core_attn_metadata: DSV4AttnMetadata,
         attn_sink: torch.Tensor,
     ) -> torch.Tensor:
-        """Unified prefill via flash_mla_sparse_fwd. Replaces the
-        flash_mla_with_kvcache call on the extend path. Per request,
-        positionally gathers the SWA window (always) and the compressed
-        cache (c4/c128) into a flat bf16 workspace, then lets
-        flash_mla_sparse_fwd consume the workspace via per-query rebased
-        indices. Chunk-invariant scaffolding lives in
+        """Unified sparse prefill over a flat BF16 workspace.
+
+        Per request, positionally gathers the SWA window (always) and the
+        compressed cache (c4/c128), then dispatches the architecture-specific
+        sparse kernel with per-query rebased indices. Chunk-invariant state lives in
         ``self.forward_metadata.sparse_prefill_cache``.
         """
-        from sgl_kernel.flash_mla import flash_mla_sparse_fwd
-
-        # q is (b, 1, h_q, d_qk); flash_mla_sparse_fwd takes (s_q, h_q, d_qk).
+        # q is (b, 1, h_q, d_qk); sparse prefill takes (s_q, h_q, d_qk).
         q_flat = q.squeeze(1)
 
         cache = self.forward_metadata.sparse_prefill_cache
@@ -1869,6 +1862,22 @@ class DeepseekV4AttnBackend(
             out=swa_slice,
         )
         kv = workspace
+
+        if _is_sm89:
+            from sglang.kernels.ops.attention.dsv4.sparse_prefill_bf16_sm89 import (
+                sparse_prefill_bf16_sm89,
+            )
+
+            return sparse_prefill_bf16_sm89(
+                q=q_flat,
+                kv=kv,
+                indices=combined_indices,
+                topk_length=combined_lens,
+                attn_sink=attn_sink,
+                softmax_scale=self.softmax_scale,
+            )
+
+        from sgl_kernel.flash_mla import flash_mla_sparse_fwd
 
         o, _, _ = flash_mla_sparse_fwd(
             q=q_flat,
