@@ -37,12 +37,26 @@ _TOKEN_DATA_STRIDE = 576  # bytes per token in data section
 _SCALE_STRIDE = 8  # bytes per token in scale section
 
 
-@triton.autotune(
-    configs=[
+def _get_sparse_decode_configs(device_capability=None):
+    if device_capability is None and torch.cuda.is_available():
+        device_capability = torch.cuda.get_device_capability()
+
+    if device_capability == (8, 9):
+        # Offline tuning on RTX 4090 selects this config for both the SWA
+        # (topk=128) and compressed-cache (topk=64) decode paths. Keeping a
+        # single config also avoids Triton's 256 MiB L2-flush allocation when
+        # DSpark starts with an almost-full 24 GiB device.
+        return [triton.Config({"BLOCK_T": 32}, num_warps=8, num_stages=2)]
+
+    return [
         triton.Config({"BLOCK_T": 16}, num_warps=4, num_stages=2),
         triton.Config({"BLOCK_T": 16}, num_warps=8, num_stages=2),
         triton.Config({"BLOCK_T": 32}, num_warps=8, num_stages=2),
-    ],
+    ]
+
+
+@triton.autotune(
+    configs=_get_sparse_decode_configs(),
     key=["topk_rounded"],
 )
 @triton.jit
