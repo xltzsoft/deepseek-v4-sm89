@@ -8,10 +8,9 @@ import torch
 
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE
 from sglang.srt.mem_cache.utils import maybe_init_custom_mem_pool
-from sglang.srt.utils import is_hip, is_npu
+from sglang.srt.utils import is_npu
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 
-_is_hip = is_hip()
 _is_npu = is_npu()
 
 
@@ -129,16 +128,11 @@ class CompressStatePool:
             dtype=dtype, device=device, enable_memory_saver=enable_memory_saver
         )
         if not online:
-            if _is_hip and ratio == 128:
-                # Request-scoped C128 state is addressed by req_pool_idx (or a
-                # per-request ring).  The pool is allocated with torch.empty(),
-                # so a cold server can otherwise read uninitialized partial
-                # states before a request slot has been written for the first
-                # time.  Initialize all C128 rows to the empty-state sentinel;
-                # C4 keeps the historical last-row sentinel behavior.
-                self.kv_score_buffer.clear()
-            else:
-                self.kv_score_buffer[-1].clear()
+            # Offline C4/C128 state can be read before every ring slot has been
+            # written, and slots are reused across requests. Initialize the
+            # whole torch.empty() allocation to the empty-state sentinel so a
+            # request never inherits stale or allocator-dependent state.
+            self.kv_score_buffer.clear()
 
     def _alloc_kv_score_buffer(
         self, *, dtype: torch.dtype, device: str, enable_memory_saver: bool
