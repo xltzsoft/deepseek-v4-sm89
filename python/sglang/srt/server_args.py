@@ -104,12 +104,13 @@ logger = logging.getLogger(__name__)
 
 
 def apply_deepseek_v4_sm89_defaults() -> None:
-    # Ada/L20 lacks the Hopper/Blackwell-only DeepGEMM and topk_v2 paths used by
-    # DeepSeek-V4's FP8 indexer and MHC prenorm fast paths.
+    # Ada/L20 lacks the Hopper/Blackwell-only DeepGEMM, topk_v2, and FlashInfer
+    # SM120 paths used by DeepSeek-V4's indexer and MHC/MLA fast paths.
     envs.SGLANG_OPT_FP8_WO_A_GEMM.set(False)
     envs.SGLANG_OPT_USE_TOPK_V2.set(False)
     envs.SGLANG_OPT_USE_TILELANG_MHC_PRE.set(False)
     envs.SGLANG_OPT_DEEPGEMM_HC_PRENORM.set(False)
+    envs.SGLANG_SM120_FLASHMLA_BACKEND.set("triton")
 
 
 # Define constants

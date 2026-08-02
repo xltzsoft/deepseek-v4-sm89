@@ -64,6 +64,7 @@ def test_sm89_deepseek_v4_defaults_disable_hopper_only_fast_paths():
         envs.SGLANG_OPT_USE_TILELANG_MHC_PRE,
         envs.SGLANG_OPT_DEEPGEMM_HC_PRENORM,
         envs.SGLANG_FP8_PAGED_MQA_LOGITS_TORCH,
+        envs.SGLANG_SM120_FLASHMLA_BACKEND,
     ]
     for field in fields:
         field.clear()
@@ -76,6 +77,7 @@ def test_sm89_deepseek_v4_defaults_disable_hopper_only_fast_paths():
         assert not envs.SGLANG_OPT_USE_TILELANG_MHC_PRE.get()
         assert not envs.SGLANG_OPT_DEEPGEMM_HC_PRENORM.get()
         assert not envs.SGLANG_FP8_PAGED_MQA_LOGITS_TORCH.get()
+        assert envs.SGLANG_SM120_FLASHMLA_BACKEND.get() == "triton"
     finally:
         for field in fields:
             field.clear()
