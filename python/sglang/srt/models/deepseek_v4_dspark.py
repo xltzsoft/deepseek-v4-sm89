@@ -53,8 +53,6 @@ from sglang.srt.utils.invariants import Bucket, InClosedRange, Invariant, expect
 
 logger = logging.getLogger(__name__)
 
-_PAD_NUM_HEADS = 64
-
 # DSpark confidence is a per-token score that must stay in [0, 1].
 _CONFIDENCE = Invariant(
     "dspark.model.confidence", Bucket.GUARD, InClosedRange(0.0, 1.0)
@@ -188,13 +186,7 @@ class DSparkAttention(MqaAttentionBase):
             and hidden_states.shape[0] <= self._multi_stream_bs_limit
         )
 
-        q_padded: Optional[torch.Tensor] = None
-        q_out: Optional[torch.Tensor] = None
-        if self.n_local_heads < _PAD_NUM_HEADS:
-            q_padded = hidden_states.new_empty(
-                hidden_states.shape[0], _PAD_NUM_HEADS, self.head_dim
-            )
-            q_out = q_padded[:, : self.n_local_heads, :]
+        _, q_padded, q_out = self._prepare_tp_query_buffer(hidden_states)
 
         if enable_multi_stream:
             current_stream = torch.cuda.current_stream()
