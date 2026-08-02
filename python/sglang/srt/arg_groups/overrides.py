@@ -50,6 +50,7 @@ from sglang.srt.utils.common import (
     is_hip,
     is_musa,
     is_npu,
+    is_sm89_supported,
     is_sm90_supported,
     is_sm100_supported,
     is_sm120_supported,
@@ -876,14 +877,28 @@ def _deepseek_v4_overrides(server_args: Any, hf_config: Any) -> dict:
         logger.info(f"Setting swa_full_tokens_ratio to 0.1 for {model_arch}.")
 
     # nvidia/DeepSeek-V4-Pro-NVFP4 uses flashinfer_trtllm_routed MoE runner backend.
+    model_config = server_args.get_model_config()
     if (
         server_args.moe_runner_backend == "auto"
-        and server_args.get_model_config().nvfp4_moe_meta is not None
+        and model_config.nvfp4_moe_meta is not None
     ):
         overrides["moe_runner_backend"] = "flashinfer_trtllm_routed"
         logger.info(
             "Use flashinfer_trtllm_routed as MoE runner backend for "
             f"{model_arch} hybrid FP8+NVFP4 checkpoint."
+        )
+    elif (
+        server_args.moe_runner_backend == "auto"
+        and is_sm89_supported()
+        and model_config.is_fp4_experts
+    ):
+        # Ada has no native MXFP4 path; use the SM80+ Marlin W4A16 fallback.
+        # The generic Triton FP8 MoE runner cannot consume packed MXFP4 expert
+        # weights without dequantizing them first.
+        overrides["moe_runner_backend"] = "marlin"
+        logger.info(
+            "Use marlin as the MoE runner backend on SM89 for packed MXFP4 "
+            f"{model_arch} experts."
         )
     return overrides
 
