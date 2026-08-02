@@ -606,6 +606,9 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                 for stage_id in range(self.num_stages)
             ]
         )
+        self.num_fused_shared_experts = int(
+            self.stages[0].mlp.num_fused_shared_experts
+        )
         self.markov_head = DSparkV4MarkovHead(
             vocab_size=int(config.vocab_size),
             markov_rank=int(dspark_config.markov_rank),
@@ -758,17 +761,26 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         stacked_params_mapping = DEEPSEEK_V4_STACKED_PARAMS_MAPPING
         from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
 
+        num_fused_shared_experts = int(
+            getattr(self, "num_fused_shared_experts", 0)
+        )
         expert_params_mapping = FusedMoE.make_expert_params_mapping(
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
-            num_experts=self.config.n_routed_experts,
+            num_experts=self.config.n_routed_experts + num_fused_shared_experts,
         )
 
         for name, loaded_weight in weights:
             mapped = self._remap_dspark_weight_name(name)
             if mapped is None:
                 continue
+            if num_fused_shared_experts > 0 and ".mlp.shared_experts." in mapped:
+                assert num_fused_shared_experts == 1
+                mapped = mapped.replace(
+                    ".mlp.shared_experts.",
+                    f".mlp.experts.{self.config.n_routed_experts}.",
+                )
 
             for param_name, weight_name, shard_id in stacked_params_mapping:
                 if weight_name not in mapped:
