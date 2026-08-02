@@ -126,6 +126,20 @@ def _get_target_verify_bs(forward_batch: ForwardBatch) -> int:
     return draft_count // draft_token_num
 
 
+def _should_use_flashmla_sparse_prefill(
+    forward_mode: ForwardMode, num_queries: int
+) -> bool:
+    """Whether the architecture-specific AOT sparse prefill kernel is usable."""
+    return (
+        forward_mode.is_extend_without_speculative()
+        and not _use_flashmla_fallback_path
+        and (
+            num_queries > _LARGE_INDEXER_QUERY_THRESHOLD
+            or envs.SGLANG_OPT_FLASHMLA_SPARSE_PREFILL.get()
+        )
+    )
+
+
 T = TypeVar("T", bound=Optional[torch.Tensor])
 
 
@@ -1700,14 +1714,10 @@ class DeepseekV4AttnBackend(
                     extra_indices.shape[-1] % 64 == 0
                 ), f"{extra_indices.shape=}'s last dimension is not aligned to 64"
 
-            # sparse_prefill_fwd does not support SM120.
-            if (
-                forward_batch.forward_mode.is_extend_without_speculative()
-                and not _is_sm120
-                and (
-                    q.shape[0] > _LARGE_INDEXER_QUERY_THRESHOLD
-                    or envs.SGLANG_OPT_FLASHMLA_SPARSE_PREFILL.get()
-                )
+            # The AOT sparse prefill kernel supports SM90a/SM100f only. SM89
+            # and SM120 use the paged Triton path for every forward mode.
+            if _should_use_flashmla_sparse_prefill(
+                forward_batch.forward_mode, q.shape[0]
             ):
                 return self._forward_prefill_sparse(
                     q=q,
