@@ -109,7 +109,7 @@ def _bootstrap_addr(req: Req) -> str:
     return NetworkAddress(req.bootstrap_host, req.bootstrap_port).to_host_port_str()
 
 
-class DecodeReqToTokenPool:
+class DecodeReqToTokenPool(ReqToTokenPool):
     """
     The difference of DecodeReqToTokenPool and ReqToTokenPool is that
     DecodeReqToTokenPool subscribes memory for pre-allocated requests.
@@ -151,6 +151,7 @@ class DecodeReqToTokenPool:
         # here: HybridMambaDecodeReqToTokenPool borrows this __init__ while
         # inheriting ReqToTokenPool.alloc, which bumps it.
         self.req_generation = torch.zeros(self._alloc_size, dtype=torch.int64)
+        self._init_slot_reset_state()
 
     def write(self, indices, values):
         self.req_to_token[indices] = values
@@ -174,6 +175,8 @@ class DecodeReqToTokenPool:
         if need_size > len(self.free_slots):
             return None
         select_index = self.free_slots[:need_size]
+        if select_index:
+            self._mark_slots_for_reset(select_index)
         self.free_slots = self.free_slots[need_size:]
         offset = 0
         for r in reqs:
@@ -191,6 +194,8 @@ class DecodeReqToTokenPool:
     def clear(self):
         self.free_slots = list(range(1, self._alloc_size))
         self.req_generation.zero_()
+        self._pending_slot_resets.clear()
+        self._pending_slot_reset_set.clear()
 
 
 class HybridMambaDecodeReqToTokenPool(HybridReqToTokenPool):
@@ -263,6 +268,9 @@ class HybridMambaDecodeReqToTokenPool(HybridReqToTokenPool):
 
     def clear(self):
         self.free_slots = list(range(1, self._alloc_size))
+        self.req_generation.zero_()
+        self._pending_slot_resets.clear()
+        self._pending_slot_reset_set.clear()
         self.mamba_allocator.clear()
 
 

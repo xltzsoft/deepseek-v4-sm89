@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "completed_at_utc": "2026-08-10T16:48:32Z",
+  "hardware": "NVIDIA GeForce RTX 4090",
+  "compute_capability": "sm89",
+  "scope": "direct kernel and launch-meta paired measurements; not end-to-end model TPS",
+  "sparse_prefill": {
+    "baseline": {
+      "BLOCK_H": 16,
+      "BLOCK_K": 16,
+      "num_warps": 8,
+      "num_stages": 2
+    },
+    "selected": {
+      "BLOCK_H": 16,
+      "BLOCK_K": 64,
+      "num_warps": 8,
+      "num_stages": 2
+    },
+    "paired_speedup_approx": 1.33,
+    "independent_seed_consistent": true,
+    "decision": "applied"
+  },
+  "dspark_schedule": {
+    "api_variant": "fused_select_finalize",
+    "case_set": "representative",
+    "candidate_count": 36,
+    "timing": {
+      "warmup": 4,
+      "paired_samples": 20,
+      "pair_order": "alternating AB/BA",
+      "timing_window_ms": [10.0, 30.0]
+    },
+    "promotion_policy": {
+      "min_geomean_speedup": 1.01,
+      "min_ci_lower_bound": 1.0,
+      "min_worst_case_speedup": 0.98
+    },
+    "runs": [
+      {
+        "seed": 0,
+        "status": "no_improvement",
+        "screening_leader": "bc64-bcp256-w2",
+        "geomean_speedup": 0.991327,
+        "speedup_ci_95": [0.989033, 0.993626],
+        "worst_case_speedup": 0.985673,
+        "winner_artifact_emitted": false
+      },
+      {
+        "seed": 100000,
+        "status": "no_improvement",
+        "screening_leader": "bc64-bcp256-w4",
+        "geomean_speedup": 0.988452,
+        "speedup_ci_95": [0.983479, 0.993449],
+        "worst_case_speedup": 0.980533,
+        "winner_artifact_emitted": false
+      }
+    ],
+    "decision": "retain_production_launch_meta"
+  }
+}

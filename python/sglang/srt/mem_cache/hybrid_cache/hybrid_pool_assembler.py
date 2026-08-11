@@ -385,6 +385,11 @@ def build_deepseek_v4_hicache_stack(
             allocator_type=_get_allocator_type(server_args),
         )
         swa_attn_allocator = params.token_to_kv_pool_allocator.swa_attn_allocator
+
+        def free_swa_device_pages(indices: torch.Tensor) -> None:
+            kvcache.clear_swa_page_state(indices)
+            swa_attn_allocator.free(indices)
+
         entries.append(
             build_pool_entry(
                 name=PoolName.SWA,
@@ -395,7 +400,7 @@ def build_deepseek_v4_hicache_stack(
                 host_evict_fn=host_swa_evict_fn,
                 device_evict_fn=device_swa_evict_fn,
                 device_alloc_fn=swa_attn_allocator.alloc,
-                device_free_fn=swa_attn_allocator.free,
+                device_free_fn=free_swa_device_pages,
             )
         )
 

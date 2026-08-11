@@ -185,6 +185,7 @@ tl_out/
 
 # Plots
 *.png
+!docs/assets/sm89/*.png
 *.pdf
 
 # personnal

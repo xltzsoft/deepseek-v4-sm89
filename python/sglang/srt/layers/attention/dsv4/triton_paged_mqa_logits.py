@@ -7,6 +7,9 @@ import triton.language as tl
 _HEAD_DIM = 128
 _NUM_HEADS = 64
 _BLOCK_SIZE = 64
+# Keep the production baseline explicit for SM89 paired A/B comparisons.
+_SM89_NUM_WARPS = 4
+_SM89_NUM_STAGES = 4
 
 FP8_DTYPE = torch.float8_e4m3fn
 
@@ -142,7 +145,7 @@ def fp8_paged_mqa_logits_triton_sm89(
         NH=num_heads,
         HD=head_dim,
         BS=block_size,
-        num_warps=4,
-        num_stages=4,
+        num_warps=_SM89_NUM_WARPS,
+        num_stages=_SM89_NUM_STAGES,
     )
     return logits

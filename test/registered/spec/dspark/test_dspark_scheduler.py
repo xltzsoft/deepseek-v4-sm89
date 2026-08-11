@@ -1,10 +1,13 @@
 import functools
 import types
 import unittest
+from unittest import mock
 
 import torch
 
+from sglang.kernels.ops.speculative.dspark import dspark_schedule
 from sglang.kernels.ops.speculative.dspark.dspark_schedule import (
+    _budget_covers_all_valid_candidates,
     schedule_verify_lens_topk_from_survival,
 )
 from sglang.srt.speculative.dspark_components.dspark_planner import (
@@ -226,6 +229,37 @@ class TestBudgetDecisionLifecycle(CustomTestCase):
 
 
 class TestScheduleVerifyLensTopk(CustomTestCase):
+    def test_budget_equal_to_effective_candidates_uses_count_fast_path(self):
+        survival = torch.tensor(
+            [[0.90, 0.25, 0.0, 0.0], [0.25, 0.0, 0.0, 0.0]], dtype=torch.float32
+        )
+        cfg = DSparkScheduleConfig(gamma=4, survival_eps=0.25)
+        valid = survival >= cfg.survival_eps
+
+        self.assertTrue(
+            _budget_covers_all_valid_candidates(
+                valid=valid, budget=int(valid.sum().item())
+            )
+        )
+        self.assertFalse(
+            _budget_covers_all_valid_candidates(
+                valid=valid, budget=int(valid.sum().item()) - 1
+            )
+        )
+
+        # A full effective budget must not invoke the value-independent sort.
+        with mock.patch.object(
+            dspark_schedule,
+            "_value_independent_descending_order",
+            side_effect=AssertionError("ranking should be bypassed"),
+        ):
+            got = schedule_verify_lens_topk_from_survival(
+                survival_probs=survival,
+                budget=int(valid.sum().item()),
+                cfg=cfg,
+            )
+        self.assertTrue(torch.equal(got, torch.tensor([3, 2], dtype=torch.int32)))
+
     @_for_each_impl
     def test_topk_does_not_exceed_budget(self, impl):
         torch.manual_seed(2)
@@ -291,7 +325,6 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
 
 
 class TestVerifyLenAnchorContract(CustomTestCase):
-
     @_for_each_impl
     def test_explicit_zero_min_still_clamped_to_anchor(self, impl):
         survival = _survival_from_confidence(

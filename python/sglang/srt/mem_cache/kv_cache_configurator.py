@@ -406,6 +406,15 @@ class KVCacheConfigurator:
             is_dsv4_model=is_dsv4_model,
             req_to_token_pool=req_to_token_pool,
         )
+        if (
+            is_dsv4_model
+            and not _is_npu
+            and get_disagg().disaggregation_mode != "decode"
+            and isinstance(token_to_kv_pool, DeepSeekV4TokenToKVPool)
+        ):
+            req_to_token_pool.register_slot_reset_hook(
+                token_to_kv_pool.clear_c128_req_states
+            )
 
         token_to_kv_pool_allocator = self._build_token_to_kv_pool_allocator(
             sizes=sizes,

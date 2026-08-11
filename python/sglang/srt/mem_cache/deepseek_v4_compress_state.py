@@ -58,6 +58,14 @@ class KVAndScore:
         self.kv.zero_()
         self.score.fill_(float("-inf"))
 
+    def clear_rows(self, row_indices: torch.Tensor) -> None:
+        if row_indices.numel() == 0:
+            return
+        self.kv_score.index_fill_(0, row_indices, 0)
+        self.kv_score[:, self._item_size :].index_fill_(
+            0, row_indices, float("-inf")
+        )
+
     def view(self, *args):
         args = list(args)
         if isinstance(args[-1], int) and args[-1] != -1:

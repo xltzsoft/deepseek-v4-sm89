@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import nullcontext
-from typing import List, Literal, NamedTuple, Optional, Tuple
+from typing import List, Literal, NamedTuple, Optional, Sequence, Tuple
 
 import torch
 
@@ -530,8 +530,11 @@ class DeepSeekV4TokenToKVPool(BaseSWAKVPool):
         self.online_c128_state_num_req_slots = c128_state_pool_size
         self.online_c128_mtp_pending_seq_lens: Optional[torch.Tensor] = None
         if ONLINE_C128 and envs.SGLANG_EXPERIMENTAL_ONLINE_C128_MTP.get():
-            self.online_c128_mtp_pending_seq_lens = torch.empty(
-                self.online_c128_state_num_req_slots, dtype=torch.int64, device=device
+            self.online_c128_mtp_pending_seq_lens = torch.full(
+                (self.online_c128_state_num_req_slots,),
+                -1,
+                dtype=torch.int64,
+                device=device,
             )
 
         # Determine this PP stage's absolute layer range
@@ -1000,22 +1003,71 @@ class DeepSeekV4TokenToKVPool(BaseSWAKVPool):
 
     def clear_c128_req_state(self, req_pool_idx: int) -> None:
         """Reset request-scoped C128 state for one req slot."""
+        self.clear_c128_req_states((req_pool_idx,))
+
+    def clear_c128_req_states(self, req_pool_indices: Sequence[int]) -> None:
+        """Reset C128 state for newly assigned request-slot generations."""
+        if not req_pool_indices:
+            return
+
+        slots = torch.as_tensor(
+            req_pool_indices, dtype=torch.int64, device=self.device
+        )
         for pool in self.compress_state_pools:
             if pool is None or pool.ratio != 128:
                 continue
 
             state = pool.kv_score_buffer.kv_score
             if ONLINE_C128:
-                row = state[req_pool_idx]
-                head_dim = row.shape[-1] // 3
-                row[:head_dim].fill_(float("-inf"))
-                row[head_dim:].zero_()
+                banks = torch.arange(
+                    1 + pool.online_mtp_max_draft_tokens,
+                    dtype=torch.int64,
+                    device=slots.device,
+                )
+                rows = (
+                    slots[:, None]
+                    + banks[None, :] * pool.online_mtp_state_slot_offset
+                ).reshape(-1)
+                head_dim = state.shape[-1] // 3
+                state.index_fill_(0, rows, 0)
+                state[:, :head_dim].index_fill_(0, rows, float("-inf"))
             else:
-                start = req_pool_idx * pool.ring_size
-                rows = state[start : start + pool.ring_size]
-                half = rows.shape[-1] // 2
-                rows[:, :half].zero_()
-                rows[:, half:].fill_(float("-inf"))
+                offsets = torch.arange(
+                    pool.ring_size, dtype=torch.int64, device=slots.device
+                )
+                rows = (slots[:, None] * pool.ring_size + offsets).reshape(-1)
+                pool.kv_score_buffer.clear_rows(rows)
+
+        if self.online_c128_mtp_pending_seq_lens is not None:
+            self.online_c128_mtp_pending_seq_lens.index_fill_(0, slots, -1)
+
+    def clear_swa_page_state(self, swa_indices: torch.Tensor) -> None:
+        """Reset C4 attention and indexer state owned by released SWA pages."""
+        if swa_indices.numel() == 0:
+            return
+
+        swa_pages = torch.unique(swa_indices.to(torch.int64) // self.swa_page_size)
+        for pool_group in (
+            self.compress_state_pools,
+            self.indexer_compress_state_pools,
+        ):
+            for pool in pool_group:
+                if pool is None or pool.ratio != 4:
+                    continue
+                offsets = torch.arange(
+                    pool.ring_size, dtype=torch.int64, device=swa_pages.device
+                )
+                rows = (swa_pages[:, None] * pool.ring_size + offsets).reshape(-1)
+                pool.kv_score_buffer.clear_rows(rows)
+
+    def clear_all_swa_page_state(self) -> None:
+        for pool_group in (
+            self.compress_state_pools,
+            self.indexer_compress_state_pools,
+        ):
+            for pool in pool_group:
+                if pool is not None and pool.ratio == 4:
+                    pool.kv_score_buffer.clear()
 
     def clear_unaccepted_c128_draft_states(
         self,

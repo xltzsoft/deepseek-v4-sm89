@@ -10,11 +10,23 @@ register_cuda_ci(est_time=5, stage="base-b", runner_config="1-gpu-small")
 
 
 def test_sm89_kernel_imports():
+    from sglang.srt.layers.attention.dsv4 import triton_paged_mqa_logits
     from sglang.srt.layers.attention.dsv4.triton_paged_mqa_logits import (
         fp8_paged_mqa_logits_triton_sm89,
     )
 
     assert callable(fp8_paged_mqa_logits_triton_sm89)
+    assert triton_paged_mqa_logits._SM89_NUM_WARPS == 4
+    assert triton_paged_mqa_logits._SM89_NUM_STAGES == 4
+
+
+def test_sm89_sparse_prefill_launch_meta_is_explicit():
+    from sglang.kernels.ops.attention.dsv4 import sparse_prefill_bf16_sm89
+
+    assert sparse_prefill_bf16_sm89._SM89_BLOCK_H == 16
+    assert sparse_prefill_bf16_sm89._SM89_BLOCK_K == 64
+    assert sparse_prefill_bf16_sm89._SM89_NUM_WARPS == 8
+    assert sparse_prefill_bf16_sm89._SM89_NUM_STAGES == 2
 
 
 def test_sm89_prefill_selects_native_sparse_kernel():

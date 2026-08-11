@@ -27,3 +27,9 @@ class BaseSWAKVPool(KVCache):
     @abc.abstractmethod
     def get_state_buf_infos(self) -> Tuple[List[int], List[int], List[int]]:
         raise NotImplementedError()
+
+    def clear_swa_page_state(self, swa_indices: torch.Tensor) -> None:
+        """Clear auxiliary state owned by SWA pages before physical reuse."""
+
+    def clear_all_swa_page_state(self) -> None:
+        """Clear all auxiliary state when the SWA allocator is reset."""

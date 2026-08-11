@@ -37,6 +37,22 @@ C8_SCHEDULER = (382.8 + 383.8) / 2
 C8_DECODE_WINDOW = 374.58
 C8_E2E = 318.59
 GPU_UTILIZATION = 92.7
+SPARSE_PREFILL_BASELINE = 1.0
+SPARSE_PREFILL_SELECTED = 1.33
+DSPARK_RUNS = (
+    {
+        "label": "seed 0 / w2",
+        "speedup": 0.991327,
+        "ci_low": 0.989033,
+        "ci_high": 0.993626,
+    },
+    {
+        "label": "seed 100000 / w4",
+        "speedup": 0.988452,
+        "ci_low": 0.983479,
+        "ci_high": 0.993449,
+    },
+)
 
 
 def configure_font() -> None:
@@ -211,11 +227,101 @@ def save_efficiency_chart() -> None:
     plt.close(fig)
 
 
+def save_kernel_tuning_chart() -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(16, 9), facecolor=COLORS["paper"])
+    fig.subplots_adjust(left=0.14, right=0.95, top=0.76, bottom=0.17, wspace=0.38)
+    fig.suptitle(
+        "SM89 kernel 配对调优结论",
+        x=0.08,
+        y=0.93,
+        ha="left",
+        fontsize=28,
+        fontweight="bold",
+        color=COLORS["ink"],
+    )
+    fig.text(
+        0.08,
+        0.865,
+        "RTX 4090 直接 kernel 测量 · 相对各自生产基线 · 不等同于端到端 TPS",
+        ha="left",
+        fontsize=14,
+        color=COLORS["muted"],
+    )
+
+    sparse_labels = ["BLOCK_K=16（旧）", "BLOCK_K=64（现行）"]
+    sparse_values = [SPARSE_PREFILL_BASELINE, SPARSE_PREFILL_SELECTED]
+    bars = axes[0].barh(
+        sparse_labels,
+        sparse_values,
+        height=0.46,
+        color=[COLORS["muted"], COLORS["green"]],
+    )
+    style_axis(axes[0], 1.48)
+    axes[0].axvline(1.0, color=COLORS["ink"], linewidth=1.4, linestyle="--")
+    axes[0].set_title("Sparse-prefill", loc="left", fontsize=19, fontweight="bold")
+    axes[0].set_xlabel("相对速度（×）", color=COLORS["muted"])
+    label_bars(axes[0], bars, ["1.00×", "约 1.33×"], 1.48)
+
+    labels = [run["label"] for run in DSPARK_RUNS]
+    speedups = [run["speedup"] for run in DSPARK_RUNS]
+    lower = [run["speedup"] - run["ci_low"] for run in DSPARK_RUNS]
+    upper = [run["ci_high"] - run["speedup"] for run in DSPARK_RUNS]
+    y_positions = list(range(len(DSPARK_RUNS)))
+    axes[1].set_facecolor(COLORS["white"])
+    axes[1].errorbar(
+        speedups,
+        y_positions,
+        xerr=[lower, upper],
+        fmt="o",
+        color=COLORS["coral"],
+        ecolor=COLORS["coral"],
+        elinewidth=2,
+        capsize=6,
+        markersize=10,
+    )
+    axes[1].set_xlim(0.975, 1.015)
+    axes[1].set_ylim(-0.65, len(DSPARK_RUNS) - 0.35)
+    axes[1].set_yticks(y_positions, labels)
+    axes[1].grid(axis="x", color=COLORS["grid"], linewidth=1)
+    axes[1].set_axisbelow(True)
+    for spine in axes[1].spines.values():
+        spine.set_visible(False)
+    axes[1].tick_params(axis="both", colors=COLORS["muted"], length=0)
+    axes[1].axvline(1.0, color=COLORS["ink"], linewidth=1.4, linestyle="--")
+    axes[1].axvline(1.01, color=COLORS["gold"], linewidth=1.4, linestyle=":")
+    axes[1].set_title("DSpark launch meta", loc="left", fontsize=19, fontweight="bold")
+    axes[1].set_xlabel("相对生产配置速度（×）", color=COLORS["muted"])
+    for y_position, speedup in zip(y_positions, speedups):
+        axes[1].text(
+            speedup + 0.001,
+            y_position,
+            f"{speedup:.4f}×",
+            va="center",
+            color=COLORS["ink"],
+            fontsize=13,
+            fontweight="bold",
+        )
+
+    fig.text(
+        0.08,
+        0.07,
+        "DSpark 两个独立 seed 的最佳候选均慢于生产配置，未生成 winner，生产 launch meta 保持不变。",
+        ha="left",
+        fontsize=12,
+        color=COLORS["muted"],
+    )
+    fig.savefig(
+        OUTPUT_DIR / "kernel-tuning.png", dpi=160, facecolor=fig.get_facecolor()
+    )
+    plt.close(fig)
+
+
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     configure_font()
     save_throughput_chart()
     save_efficiency_chart()
+    save_kernel_tuning_chart()
     for path in sorted(OUTPUT_DIR.glob("*.png")):
         print(f"generated {path.relative_to(ROOT)} ({path.stat().st_size} bytes)")
 

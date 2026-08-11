@@ -15,6 +15,11 @@ import triton.language as tl
 
 
 _DSV4_HEAD_DIM = 512
+# SM89 launch meta selected by direct-kernel parity sweeps on RTX 4090.
+_SM89_BLOCK_H = 16
+_SM89_BLOCK_K = 64
+_SM89_NUM_WARPS = 8
+_SM89_NUM_STAGES = 2
 
 
 @triton.jit
@@ -196,9 +201,9 @@ def sparse_prefill_bf16_sm89(
     attn_sink = attn_sink.contiguous()
     out = torch.empty_like(q)
 
-    block_h = 16
+    block_h = _SM89_BLOCK_H
     block_d = _DSV4_HEAD_DIM
-    block_k = 16
+    block_k = _SM89_BLOCK_K
     grid = (q.shape[0], triton.cdiv(q.shape[1], block_h))
     _sparse_prefill_bf16_sm89_kernel[grid](
         q,
@@ -223,7 +228,7 @@ def sparse_prefill_bf16_sm89(
         BLOCK_H=block_h,
         BLOCK_D=block_d,
         BLOCK_K=block_k,
-        num_warps=8,
-        num_stages=2,
+        num_warps=_SM89_NUM_WARPS,
+        num_stages=_SM89_NUM_STAGES,
     )
     return out

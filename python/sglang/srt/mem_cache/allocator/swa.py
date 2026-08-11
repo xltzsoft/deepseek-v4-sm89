@@ -355,6 +355,7 @@ class SWATokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
 
         swa_indices = self.full_to_swa_index_mapping[mapping_indices]
         swa_indices = swa_indices[swa_indices > 0]
+        self._kvcache.clear_swa_page_state(swa_indices)
         self.swa_attn_allocator.free(swa_indices)
         self.full_to_swa_index_mapping[mapping_indices] = 0
 
@@ -380,6 +381,7 @@ class SWATokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         self.clear()
 
     def clear(self):
+        self._kvcache.clear_all_swa_page_state()
         self.swa_attn_allocator.clear()
         self.full_attn_allocator.clear()
         # Note: the last item is -1, we don't clear it, see the comment in __init__

@@ -31,7 +31,7 @@ import os
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, fields
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -281,12 +281,38 @@ class ReqToTokenPool:
             )
         self.free_slots = list(range(1, self._alloc_size))
         self.req_generation = torch.zeros(self._alloc_size, dtype=torch.int64)
+        self._init_slot_reset_state()
+
+    def _init_slot_reset_state(self) -> None:
+        self._slot_reset_hooks: List[Callable[[Sequence[int]], None]] = []
+        self._pending_slot_resets: List[int] = []
+        self._pending_slot_reset_set = set()
 
     def write(self, indices, values):
         self.req_to_token[indices] = values
 
     def available_size(self):
         return len(self.free_slots)
+
+    def register_slot_reset_hook(self, hook: Callable[[Sequence[int]], None]) -> None:
+        """Register cleanup drained on the consumer stream before a forward."""
+        self._slot_reset_hooks.append(hook)
+
+    def _mark_slots_for_reset(self, slots: Sequence[int]) -> None:
+        for slot in slots:
+            if slot not in self._pending_slot_reset_set:
+                self._pending_slot_reset_set.add(slot)
+                self._pending_slot_resets.append(slot)
+
+    def drain_slot_reset_hooks(self) -> None:
+        """Reset newly assigned slot generations on the current consumer stream."""
+        if not self._pending_slot_resets:
+            return
+        slots = tuple(self._pending_slot_resets)
+        for hook in self._slot_reset_hooks:
+            hook(slots)
+        self._pending_slot_resets.clear()
+        self._pending_slot_reset_set.clear()
 
     def alloc(self, reqs: list[Req]) -> Optional[List[int]]:
         # Indices of reqs that already have a req_pool_idx and will reuse
@@ -307,6 +333,8 @@ class ReqToTokenPool:
         if need_size > len(self.free_slots):
             return None
         select_index = self.free_slots[:need_size]
+        if select_index:
+            self._mark_slots_for_reset(select_index)
         self.free_slots = self.free_slots[need_size:]
         offset = 0
         for r in reqs:
@@ -324,6 +352,8 @@ class ReqToTokenPool:
     def clear(self):
         self.free_slots = list(range(1, self._alloc_size))
         self.req_generation.zero_()
+        self._pending_slot_resets.clear()
+        self._pending_slot_reset_set.clear()
 
 
 class MambaPool:

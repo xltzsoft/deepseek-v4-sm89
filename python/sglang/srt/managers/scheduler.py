@@ -3469,6 +3469,7 @@ class Scheduler(
 
                 with self.forward_stream_ctx:
                     self.forward_stream.wait_stream(self.schedule_stream)
+                    self.req_to_token_pool.drain_slot_reset_hooks()
                     # resolve consumes SB staging (prefill_input_ids_cpu /
                     # mix_running_indices). Run OUTSIDE isolation so the
                     # snapshot captures the post-consume state — restoring
@@ -3556,6 +3557,7 @@ class Scheduler(
                     )
                     batch.spec_info.future_indices = future_indices
             elif self.enable_pdmux and batch.forward_mode.is_split_prefill():
+                self.req_to_token_pool.drain_slot_reset_hooks()
                 resolve_forward_inputs(batch, self.future_map)
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)
                 self._relay_forward_payload(batch.req_pool_indices, batch_result)
@@ -3563,6 +3565,7 @@ class Scheduler(
             elif not batch.spec_algorithm.is_none():
                 # Non-overlap: drive the V2 worker synchronously (no
                 # future_map relay / on_publish).
+                self.req_to_token_pool.drain_slot_reset_hooks()
                 resolve_forward_inputs(batch, self.future_map)
                 with self._forward_isolation(batch, overlap=False):
                     batch_result = self.model_worker.forward_batch_generation(batch)
@@ -3583,6 +3586,7 @@ class Scheduler(
                     return_hidden_states=batch.return_hidden_states,
                 )
             else:
+                self.req_to_token_pool.drain_slot_reset_hooks()
                 kwargs = (
                     {"pp_proxy_tensors": pp_proxy_tensors}
                     if self.spec_algorithm.is_none()
@@ -3619,6 +3623,7 @@ class Scheduler(
                 self.record_batch_in_overlap(batch)
                 with self.forward_stream_ctx:
                     self.forward_stream.wait_stream(self.schedule_stream)
+                    self.req_to_token_pool.drain_slot_reset_hooks()
                     resolve_forward_inputs(batch, self.future_map)
                     pooler_output, can_run_cuda_graph = (
                         self.tp_worker.forward_batch_embedding(batch)
@@ -3630,6 +3635,7 @@ class Scheduler(
                     )
                     ret.copy_to_cpu()
             else:
+                self.req_to_token_pool.drain_slot_reset_hooks()
                 resolve_forward_inputs(batch, self.future_map)
                 pooler_output, can_run_cuda_graph = (
                     self.tp_worker.forward_batch_embedding(batch)
