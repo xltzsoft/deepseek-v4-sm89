@@ -10,7 +10,8 @@ Attention、Indexer、MoE、CUDA Graph 和显存布局进行底层适配。
 > [!WARNING]
 > 当前版本是性能研究快照，不是生产版本。target-only 路径已能启动并完成性能测试，
 > 请求槽与 SWA 页面复用已加入定向清理和 CPU 回归，但尚未重新完成 8 卡、多请求、
-> 正反顺序的端到端压力验证；DSpark 也尚未通过严格逐 token 一致性验证。部署前请先
+> 正反顺序的端到端压力验证；DSpark 的 C128 乱码问题已修复（单流 decode 实测
+> 96–126 token/s），长上下文组合配置仍受 draft 显存占用限制。部署前请先
 > 阅读[已知限制](#已知限制)。
 
 ## 项目概览
@@ -210,9 +211,13 @@ pytest -q \
    清 C128，并在物理 SWA page 释放前清 C4 attention/indexer，CPU 回归覆盖槽位隔离、
    online MTP draft bank 与清理顺序；真实 CUDA stream、HiCache 往返和 8 卡正反请求顺序
    尚未完成端到端复验。
-2. **当前不建议启用 DSpark。** 修复后 DSpark 可以在每卡 24 GB 内完成加载和启动，
-   但 greedy 输出没有通过 target reference 的逐 token 一致性验证，且两组独立
-   launch-meta 配对搜索都没有找到快于生产配置的候选。
+2. **DSpark 可在 24 GB 卡上启用，但显存代价需知悉。** C128 压缩状态在 verify 后
+   未清理导致的 greedy 乱码已修复（verify 后按 EAGLE 同款语义清理被拒绝 draft
+   位置的 C128 ring 槽，见 `dspark_worker_v2.py`）；修复后 DSpark 输出与同构建
+   target 的逐 token 漂移水平相当于 target 自身正/反序重跑的噪声底（该栈本身无
+   run 级确定性），8 卡实测单流 decode 约 96–126 token/s（target-only 约 48–55）。
+   注意 draft 每卡额外占约 2.3 GB 显存，长上下文 KV 池会相应缩小；两组独立
+   launch-meta 配对搜索仍未找到快于生产配置的候选。
 3. **仓库不分发模型权重。** 使用者需自行获取权重并遵守其许可证和使用条款。
 4. **性能结果适用范围有限。** 驱动、CUDA/PyTorch 版本、GPU 时钟与温度、prompt
    分布和 batching 策略都会显著影响吞吐。
