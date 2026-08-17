@@ -661,6 +661,24 @@ class DSparkWorkerV2(BaseSpecWorker):
             commit_lens=accept.commit_lens,
         )
 
+        # DSpark verify writes C128 compressor states for all γ+1 draft positions
+        # (init_forward_metadata_target_verify -> need_compress=True). Rejected
+        # positions must be reset to the empty sentinel, mirroring the EAGLE path
+        # (eagle_worker_common.py), otherwise the polluted ring states corrupt
+        # later decode/verify rounds and greedy output degenerates.
+        clear_unaccepted_c128 = getattr(
+            self.model_runner.token_to_kv_pool,
+            "clear_unaccepted_c128_draft_states",
+            None,
+        )
+        if clear_unaccepted_c128 is not None and not batch.forward_mode.is_idle():
+            clear_unaccepted_c128(
+                batch.req_pool_indices,
+                prefix_lens,
+                accept.commit_lens,
+                self.verify_num_draft_tokens,
+            )
+
         folded_commit = folded_accept and epilogue.folds_commit
         if not folded_commit:
             self._verify_executor.commit_hidden(
